@@ -39,14 +39,19 @@ The application displays three panels: **Original Grayscale**, **Noisy Image**, 
 Open app.py and update the stream details:
 
 \# app.py  
-\_URL \= 'http://\[YOUR\_ESP32\_IP\_ADDRESS\]' \# e.g., '[http://192.168.1.100](http://192.168.1.100)'
-\_PORT \= '81'                           \# Default, change if necessary
+
+```python
+_URL = 'http://[YOUR_ESP32_IP_ADDRESS]' # e.g., 'http://192.168.1.100'
+_PORT = '81' # Default, change if necessary
+```
 
 ### **Running the Server**
 
 Execute the Python script:
 
+```bash
 python app.py
+```
 
 The application will be accessible at http://127.0.0.1:5000/.
 
