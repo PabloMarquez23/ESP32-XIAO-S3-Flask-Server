@@ -1,32 +1,91 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-     <meta charset="UTF-8">
-     <meta http-equiv="X-UA-Compatible" content="IE=edge">
-     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-     <style>
-          .container{
-               margin: 0;
-               padding: 0;
-               width: 100%;
-               height: 100vh;
-               background-color: #f1f1bc;
-               color: black;
-               text-align: center;
-          }
-          .containerHeader{
-               display: flex;
-               flex-direction: column;
-               align-items: center;
-          }
-     </style>
-     <title>Videostreaming ESP32-CAM</title>
-</head>
-<body class = "container">
-     <div class="containerHeader">
-          <h1>Video Streaming</h1>
-          <img src="{{ url_for('static', filename='Header.webp') }}" alt="Image header" width="50%">
-     </div>
-     <img src="{{ url_for('video_stream') }}">
-</body>
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Visión por Computador - ESP32-CAM + Flask</title>
+    <link rel="stylesheet" href="/static/styles.css?v=2" />
+  </head>
+  <body>
+    <header><h1>Streaming + Procesamiento (OpenCV + PyTorch)</h1></header>
+
+    <main>
+      <section class="video">
+        <img id="stream" src="/video_feed" alt="video stream" />
+      </section>
+
+      <section class="controls">
+        <h2>Controles</h2>
+
+        <!-- Iluminación (CLAHE) -->
+        <div class="group">
+          <label><input type="checkbox" id="clahe_enable" checked /> CLAHE</label>
+          <label>clipLimit:
+            <input type="range" id="clahe_clip" min="1" max="6" step="0.5" value="2" />
+          </label>
+          <label>tiles:
+            <input type="range" id="clahe_tiles" min="4" max="12" step="1" value="8" />
+          </label>
+        </div>
+
+        <!-- PyTorch conv -->
+        <div class="group">
+          <label><input type="checkbox" id="torch_enable" checked /> PyTorch conv</label>
+          <label>kernel:
+            <input type="range" id="torch_kernel" min="0" max="3" step="1" value="1" />
+            <span id="kernel_name">LoG5x5</span>
+          </label>
+        </div>
+
+        <!-- Ruido -->
+        <div class="group">
+          <label>Noise:
+            <select id="noise_type">
+              <option value="none">none</option>
+              <option value="gauss">gauss</option>
+              <option value="speckle">speckle</option>
+            </select>
+          </label>
+          <label>gauss std:
+            <input type="range" id="gauss_std" min="0" max="50" step="1" value="10" />
+          </label>
+          <label>speckle var:
+            <input type="range" id="speckle_var" min="0" max="0.2" step="0.01" value="0.05" />
+          </label>
+        </div>
+
+        <!-- Suavizados -->
+        <div class="group">
+          <label>blur k:
+            <input type="range" id="blur_ksize" min="1" max="15" step="2" value="5" />
+          </label>
+          <label>median k:
+            <input type="range" id="median_ksize" min="1" max="15" step="2" value="5" />
+          </label>
+          <label>gauss k:
+            <input type="range" id="gauss_ksize" min="1" max="15" step="2" value="5" />
+          </label>
+        </div>
+
+        <!-- Detectores -->
+        <div class="group">
+          <label><input type="checkbox" id="sobel_enable" checked /> Sobel</label>
+          <label><input type="checkbox" id="canny_enable" /> Canny</label>
+        </div>
+      </section>
+    </main>
+
+    <script src="/static/main.js?v=3"></script>
+    <script>
+      // Nombre amigable del kernel según el slider
+      const mapKernel = ['Edge3x3', 'LoG5x5', 'Sharpen', 'Emboss'];
+      const k = document.getElementById('torch_kernel');
+      const label = document.getElementById('kernel_name');
+      if (k && label) {
+        const upd = () => label.textContent = mapKernel[Number(k.value)] ?? ('id=' + k.value);
+        k.addEventListener('input', upd);
+        upd();
+      }
+    </script>
+  </body>
 </html>

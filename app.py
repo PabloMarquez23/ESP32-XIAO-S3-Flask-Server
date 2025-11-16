@@ -1,96 +1,142 @@
-
-# Author: vlarobbyk
-# Version: 1.0
-# Date: 2024-10-20
-# Description: A simple example to process video captured by the ESP32-XIAO-S3 or ESP32-CAM-MB in Flask.
-# Updated: 2025-08-11
-
-from flask import Flask, render_template, Response, stream_with_context, Request
-from io import BytesIO
-
-import cv2
-import numpy as np
-import requests
-import torch
-import torch.nn.functional as F
+# app.py
+import os
+from flask import Flask, render_template, Response, request
+from processing.stream import VideoSource
+from processing.pipes import ProcessingPipeline, PipelineConfig
 
 app = Flask(__name__)
 
-# IP Address
-_URL = 'http://10.0.0.11'
-# Default Streaming Port
-_PORT = '81'
-# Default streaming route
-_ST = '/stream'
-SEP = ':'
+# =====================================
+# CONFIGURACIÓN PRINCIPAL
+# =====================================
+config = PipelineConfig()
+pipeline = ProcessingPipeline(config)
 
-stream_url = ''.join([_URL,SEP,_PORT,_ST])
+_source = None
+_source_err = None
 
-# Method to capture the video generated from the ESP32-XIAO-S3 mini cam
-def video_capture():
-    res = requests.get(stream_url, stream=True)
 
-    median_mask = torch.ones(3, 3, dtype = torch.float32)/9.0
+def get_source():
+    """
+    Inicializa la fuente de video.
 
-    kernel = median_mask.unsqueeze(0).unsqueeze(0)
-    convolved_output = None
-    img_output = None
+    Si existe la variable de entorno CAMERA_URL, la usa.
+    Si no, usa por defecto el stream de la ESP32:
+        http://192.168.18.10/stream
+    """
+    global _source, _source_err
+    if _source is not None:
+        return _source
 
-    for chunk in res.iter_content(chunk_size=100000):
+    # ⚠️ AQUÍ ESTABA EL ERROR:
+    # No se debe poner la URL como nombre de variable de entorno.
+    # Debe ser algo tipo "CAMERA_URL".
+    camera_url = os.getenv("CAMERA_URL", "http://192.168.18.10/stream")
 
-        if len(chunk) > 100:
-            try:
-                img_data = BytesIO(chunk)
-                cv_img = cv2.imdecode(np.frombuffer(img_data.read(), np.uint8), 1)
-                gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
-                N = 537
-                height, width = gray.shape
+    try:
+        _source = VideoSource(camera_url)
+        _source_err = None
+        print(f"[VideoSource] Usando fuente: {camera_url}")
+    except Exception as e:
+        _source = None
+        _source_err = str(e)
+        print(f"[VideoSource][ERROR] {e}")
+    return _source
 
-                noise = np.full((height, width), 0, dtype=np.uint8)
-                random_positions = (np.random.randint(0, height, N), np.random.randint(0, width, N))
-                
-                noise[random_positions[0], random_positions[1]] = 255
 
-                noise_image = cv2.bitwise_or(gray, noise)
-
-                img_tensor = torch.from_numpy(noise_image.astype(np.float32)).unsqueeze(0).unsqueeze(0)
-
-                convolved_output = F.conv2d(
-                    input = img_tensor,
-                    weight = kernel,
-                    padding = 1,
-                    bias = None
-                )
-
-                img_output = convolved_output.cpu().numpy().squeeze()
-                img_output = cv2.convertScaleAbs(img_output)
-
-                total_image = np.zeros((height, width * 3), dtype=np.uint8)
-                total_image[:, :width] = gray
-                total_image[:, width:width*2] = noise_image
-                total_image[:, width*2:] = img_output
-
-                (flag, encodedImage) = cv2.imencode(".jpg", total_image)
-                if not flag:
-                    continue
-
-                yield(b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + 
-                bytearray(encodedImage) + b'\r\n')
-
-            except Exception as e:
-                print(e)
-                continue
-
+# =====================================
+# PÁGINA PRINCIPAL
+# =====================================
 @app.route("/")
 def index():
-    return render_template("index.html")
+    if _source is None:
+        get_source()
+
+    help_msg = None
+    if _source is None and _source_err:
+        help_msg = f"""No se pudo abrir la fuente de video.<br><pre>{_source_err}</pre>
+<br>Prueba:
+- Para webcam USB: <code>export VIDEO_DEVICE=/dev/video0</code><br>
+- Para archivo local: <code>export CAMERA_URL=/ruta/video.mp4</code><br>
+- Para MJPEG por HTTP (ESP32/mjpg-streamer):<br>
+  <code>export CAMERA_URL=http://192.168.18.10/stream</code><br>
+Luego reinicia: <code>prime-run python app.py</code>"""
+    return render_template("index.html", help_msg=help_msg)
 
 
-@app.route("/video_stream")
-def video_stream():
-    return Response(video_capture(),
-                    mimetype="multipart/x-mixed-replace; boundary=frame")
+# =====================================
+# EVITAR CACHÉ EN EL NAVEGADOR
+# =====================================
+@app.after_request
+def add_no_cache_headers(resp):
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
 
+
+# =====================================
+# ENDPOINT DE CONTROLES
+# =====================================
+@app.route("/controls", methods=["POST"])
+def controls():
+    data = request.json or {}
+    print("Controls =>", data)  # Verás esto en la terminal
+    config.update_from_dict(data)
+    return {"ok": True, "applied": data, "cfg": config.__dict__}
+
+
+# =====================================
+# ENDPOINT DE DEPURACIÓN DE CONFIG
+# =====================================
+@app.route("/debug_config")
+def debug_config():
+    """Permite ver la configuración actual del pipeline."""
+    return {
+        **config.__dict__,
+        "camera_url": os.getenv("CAMERA_URL", "http://192.168.18.10/stream"),
+    }
+
+
+# =====================================
+# STREAM DE VIDEO MJPEG
+# =====================================
+@app.route("/video_feed")
+def video_feed():
+    src = get_source()
+    if src is None:
+        # En caso de error, devolver texto
+        def err():
+            msg = (_source_err or "Sin fuente de video").encode("utf-8")
+            yield b"--frame\r\nContent-Type: text/plain\r\n\r\n" + msg + b"\r\n"
+
+        return Response(err(), mimetype="multipart/x-mixed-replace; boundary=frame")
+
+    def gen():
+        for frame in src.frames():
+            processed = pipeline.process(frame)
+            ok, jpeg = pipeline.encode_jpeg(processed)
+            if not ok or jpeg is None:
+                continue
+
+            payload = jpeg if isinstance(jpeg, (bytes, bytearray)) else jpeg.tobytes()
+            header = (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n"
+                b"Content-Length: " + str(len(payload)).encode() + b"\r\n\r\n"
+            )
+            yield header + payload + b"\r\n"
+
+    return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
+
+
+# =====================================
+# INICIO DE LA APLICACIÓN
+# =====================================
 if __name__ == "__main__":
-    app.run(debug=False)
-
+    # Ejecutar el servidor Flask
+    app.run(
+        host=os.getenv("BIND", "127.0.0.1"),
+        port=int(os.getenv("PORT", "5000")),
+        debug=False,
+        threaded=True,
+    )
